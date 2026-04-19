@@ -35,6 +35,17 @@ streamlit run app.py
 python scripts/build_corpus.py
 ```
 
+可从白话汇总文件切分离线标注输入：
+
+```powershell
+python scripts/build_tagging_chunks.py
+```
+
+默认读取 `.cache/zizhi_white_corpus.txt`，输出：
+
+- `.cache/zizhi_tagging_chunks.jsonl`：客观史实 chunk，含 `commentary_ids`
+- `.cache/zizhi_simaguang_commentaries.jsonl`：单独抽离的司马光评论，通过 `commentary_id` / `linked_chunk_ids` 与事实 chunk 关联
+
 如需指定其他资源：
 
 ```powershell
@@ -59,8 +70,10 @@ streamlit run app.py
 - `zizhi/corpus.py`：内置种子语料与 JSONL 加载。
 - `zizhi/retrieval.py`：检索实现，支持 LanceDB 降级。
 - `zizhi/agents.py`：六类 Agent 节点逻辑。
+- `zizhi/tagging_prompt.py`：《资治通鉴》结构化标注 prompt 模板加载与渲染。
 - `zizhi/workflow.py`：LangGraph 编排与手动兜底执行。
 - `zizhi/rendering.py`：Markdown 与 Mermaid 前端渲染辅助。
+- `prompts/`：结构化标注的 system/user prompt 与候选标签池。
 
 ## Specs
 

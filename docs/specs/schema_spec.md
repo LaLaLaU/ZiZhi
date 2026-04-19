@@ -97,6 +97,8 @@
 - `strategy_labels` 描述该视角可采用的动作
 - `modern_scenes` 用于连接现代用户问题
 
+标签取值以 `perspective_tagging_spec.md` 的扩展标签池为准。扩展标签池只增加枚举候选，不改变字段类型；所有标签仍必须能追溯到 `evidence_section_keys`。
+
 ### 3.4 CaseProfile
 
 表示一个可被检索和引用的历史事件链。

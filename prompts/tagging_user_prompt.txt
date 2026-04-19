@@ -1,0 +1,32 @@
+现在请基于下面输入进行结构化标注。
+
+视角类型枚举：
+- manager
+- subordinate
+- peer
+- observer
+- unknown
+
+候选事件标签：
+{{EVENT_LABELS}}
+
+候选风险标签：
+{{RISK_LABELS}}
+
+候选策略标签：
+{{STRATEGY_LABELS}}
+
+候选现代场景标签：
+{{MODERN_SCENES}}
+
+补充约束：
+1. 一个 chunk 通常选择 2-6 个核心 event_labels；复杂事件链可以更多，但不要泛滥。
+2. 先抽取“直接动作”，再抽取“权力结构”，最后再考虑“现代映射”。
+3. 若某个 perspective 没有清晰可迁移策略，strategy_labels 可为空数组。
+4. 不要因为候选标签很多就强行覆盖；宁可少标、准标。
+5. facts、actors、perspectives 都应尽量去重，避免同义重复。
+6. 若输入中同时包含史实叙事与评论议论，优先围绕叙事史实标注；评论只在有必要时作为 observer 视角辅助。
+7. 输出必须是合法 JSON，不要出现注释，不要出现多余文本。
+
+现在处理下面输入：
+{{INPUT_JSON}}
