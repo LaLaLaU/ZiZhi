@@ -10,6 +10,8 @@ from zizhi.txt_ingest import parse_txt_corpus_to_chunks, write_chunks_jsonl as w
 
 
 DEFAULT_CACHE_PATH = Path(".cache") / "zizhi_corpus_chunks.jsonl"
+DEFAULT_TAGGING_CHUNK_CACHE_PATH = Path(".cache") / "zizhi_tagging_chunks.jsonl"
+DEFAULT_SIMAGUANG_COMMENTARY_CACHE_PATH = Path(".cache") / "zizhi_simaguang_commentaries.jsonl"
 
 
 SEED_CORPUS: list[HistoricalChunk] = [
@@ -121,6 +123,92 @@ def load_corpus(path: str | Path | None = None) -> list[HistoricalChunk]:
         return SEED_CORPUS
 
     return _load_from_path(Path(path))
+
+
+def load_simaguang_commentary_corpus(path: str | Path | None = None) -> list[HistoricalChunk]:
+    commentary_path = Path(path) if path is not None else DEFAULT_SIMAGUANG_COMMENTARY_CACHE_PATH
+    if not commentary_path.exists() or commentary_path.stat().st_size == 0:
+        return []
+
+    chunks: list[HistoricalChunk] = []
+    with commentary_path.open("r", encoding="utf-8") as file:
+        for line in file:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            row = json.loads(stripped)
+            commentary_text = row.get("commentary_text", "")
+            source_section_key = row.get("source_section_key", "")
+            chunks.append(
+                HistoricalChunk(
+                    chunk_id=row.get("commentary_id", ""),
+                    volume_no=row.get("volume_no"),
+                    volume=row.get("volume_title", ""),
+                    year=row.get("year_title", ""),
+                    chapter_title=row.get("chapter_title", ""),
+                    chunk_type="commentary",
+                    section_key=source_section_key,
+                    section_keys=[source_section_key] if source_section_key else [],
+                    retrieval_text=commentary_text,
+                    white_char_count=int(row.get("commentary_char_count", len(commentary_text))),
+                    section_count=1 if source_section_key else 0,
+                    chunk_version=row.get("commentary_version", ""),
+                    white_text=commentary_text,
+                    annotation_text=f"author:{row.get('author', '司马光')}",
+                    text=commentary_text,
+                    people=[row.get("author", "司马光")],
+                    events=["史臣评论"],
+                    topic_tags=["评论", "评价", "观察"],
+                    situation_tags=["observer"],
+                    source_priority=0.86,
+                )
+            )
+    return chunks
+
+
+def load_tagging_chunk_corpus(path: str | Path | None = None) -> list[HistoricalChunk]:
+    tagging_path = Path(path) if path is not None else DEFAULT_TAGGING_CHUNK_CACHE_PATH
+    if not tagging_path.exists() or tagging_path.stat().st_size == 0:
+        return []
+
+    chunks: list[HistoricalChunk] = []
+    with tagging_path.open("r", encoding="utf-8") as file:
+        for line in file:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            row = json.loads(stripped)
+            white_text = row.get("white_text", "")
+            chapter_title = row.get("chapter_title", "")
+            year_title = row.get("year_title", "")
+            retrieval_text = " ".join(part for part in [chapter_title, year_title, white_text] if part)
+            section_keys = [key for key in row.get("section_keys", []) if key]
+            commentary_ids = [key for key in row.get("commentary_ids", []) if key]
+            chunks.append(
+                HistoricalChunk(
+                    chunk_id=row.get("chunk_id", ""),
+                    volume_no=row.get("volume_no"),
+                    volume=row.get("volume_title", ""),
+                    year=year_title,
+                    chapter_title=chapter_title,
+                    chunk_type="original",
+                    section_key=section_keys[0] if section_keys else "",
+                    section_keys=section_keys,
+                    retrieval_text=retrieval_text,
+                    white_char_count=int(row.get("white_char_count", len(white_text))),
+                    section_count=int(row.get("section_count", len(section_keys))),
+                    chunk_version=row.get("chunk_version", ""),
+                    white_text=white_text,
+                    annotation_text=f"linked_commentaries:{','.join(commentary_ids)}" if commentary_ids else "",
+                    text=retrieval_text or white_text,
+                    people=[],
+                    events=[],
+                    topic_tags=[],
+                    situation_tags=[],
+                    source_priority=0.88,
+                )
+            )
+    return chunks
 
 
 def _load_from_path(path: Path) -> list[HistoricalChunk]:

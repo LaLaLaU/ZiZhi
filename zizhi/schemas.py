@@ -111,6 +111,10 @@ class AnalysisState(BaseModel):
     user_input: str
     problem_summary: str = ""
     intent_type: str = ""
+    routing_source: str = ""
+    routing_confidence: float = 0.0
+    routing_reason: str = ""
+    routing_model: str = ""
     scene_type: str = ""
     actors: list[Actor] = Field(default_factory=list)
     conflicts: list[str] = Field(default_factory=list)

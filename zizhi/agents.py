@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from zizhi.retrieval import HistoricalRetriever
+from zizhi.router import IntentRouter
 from zizhi.schemas import (
     Actor,
     AnalysisState,
@@ -39,29 +41,145 @@ EMOTION_KEYWORDS: list[tuple[str, list[str]]] = [
     ("疲惫", ["累", "疲惫", "尽力", "耗尽"]),
 ]
 
+FACTUAL_PATTERNS = ["谁", "何时", "什么时候", "哪年", "哪一年", "哪里", "何地", "哪国", "几个", "哪些", "是什么", "是不是"]
+FACTUAL_LOOKUP_KEYWORDS = ["是谁", "谁杀了", "谁任命", "谁拥立", "谁攻打", "有哪些故事", "讲讲", "生平", "经历"]
+COMMENTARY_PATTERNS = ["司马光怎么看", "司马光如何评价", "司马光评价", "司马光评论", "臣司马光曰", "司马光怎么说"]
+ANALYSIS_HINTS = [
+    "怎么办",
+    "如何处理",
+    "怎么处理",
+    "如何管理",
+    "怎么管理",
+    "如何应对",
+    "怎么应对",
+    "如何带队",
+    "如何用人",
+    "相关管理问题",
+    "本质上相关",
+]
+FIRST_PERSON_HINTS = ["我", "我们", "我的", "我们团队", "我们公司", "老板", "领导", "同事", "下属", "合伙人"]
+DOMAIN_HINTS = [
+    "资治通鉴",
+    "司马光",
+    "历史",
+    "史例",
+    "史臣",
+    "吴起",
+    "智瑶",
+    "君臣",
+    "诸侯",
+    "战国",
+    "秦",
+    "汉",
+    "唐",
+    "周",
+    "晋",
+    "魏",
+    "赵",
+    "韩",
+    "楚",
+    "齐",
+    "燕",
+    "老板",
+    "领导",
+    "同事",
+    "下属",
+    "汇报",
+    "职场",
+    "团队",
+    "管理",
+    "组织",
+    "合伙人",
+    "控制权",
+]
+OUT_OF_SCOPE_HINTS = [
+    "红烧肉",
+    "菜谱",
+    "做饭",
+    "烹饪",
+    "炒菜",
+    "炖肉",
+    "天气",
+    "股票",
+    "足球比分",
+    "电影推荐",
+    "旅游攻略",
+    "减肥餐",
+    "Python报错",
+]
+LOOKUP_NOISE_TERMS = [
+    "司马光怎么看",
+    "司马光如何评价",
+    "司马光评价",
+    "司马光评论",
+    "司马光怎么说",
+    "是谁",
+    "谁杀了",
+    "杀了",
+    "杀死",
+    "有哪些故事",
+    "故事",
+    "讲讲",
+    "生平",
+    "经历",
+    "如何评价",
+    "怎么看",
+    "怎么说",
+    "评价",
+    "评论",
+    "有哪些",
+    "哪些",
+    "什么",
+]
+LOOKUP_SENTENCE_RE = re.compile(r"[^。！？；!?;\n]+[。！？；!?;]?")
+
 
 @dataclass
 class AgentContext:
     retriever: HistoricalRetriever
+    factual_retriever: HistoricalRetriever | None = None
+    commentary_retriever: HistoricalRetriever | None = None
+    intent_router: IntentRouter | None = None
 
 
-def intent_scene_analyzer(state: AnalysisState, _: AgentContext) -> AnalysisState:
+def intent_scene_analyzer(state: AnalysisState, context: AgentContext) -> AnalysisState:
     text = state.user_input
+    intent_type, routing_source, routing_confidence, routing_reason, routing_model = _resolve_intent(text, context)
     scene_type = _pick_scene(text)
     emotion_labels = _pick_emotions(text)
     actors = _extract_actors(text)
     conflicts = _extract_conflicts(text, scene_type)
     constraints = _extract_constraints(text)
 
+    if intent_type == "factual_lookup":
+        scene_type = "客观事实查询"
+        conflicts = []
+        constraints = ["优先直接回答史实，不进行策略映射"]
+    elif intent_type == "commentary_lookup":
+        scene_type = "史臣评论查询"
+        conflicts = []
+        constraints = ["优先检索史臣评论，不展开现实策略分析"]
+    elif intent_type == "out_of_scope":
+        scene_type = "域外问题"
+        actors = []
+        conflicts = []
+        constraints = ["当前问题超出《资治通鉴》史实检索与历史映射分析范围"]
+
     state.problem_summary = _summarize_problem(text, scene_type)
-    state.intent_type = scene_type
+    state.intent_type = intent_type
+    state.routing_source = routing_source
+    state.routing_confidence = routing_confidence
+    state.routing_reason = routing_reason
+    state.routing_model = routing_model
     state.scene_type = scene_type
     state.actors = actors
     state.conflicts = conflicts
     state.constraints = constraints
     state.emotion_labels = emotion_labels
+    if intent_type in {"factual_lookup", "commentary_lookup"}:
+        state.retrieval_queries = [text]
     state.situation_analysis = SituationAnalysis(
-        overall_judgement=_overall_judgement(scene_type, conflicts),
+        overall_judgement=_overall_judgement(scene_type, conflicts, intent_type),
         core_conflicts=conflicts,
         actors=actors,
     )
@@ -92,6 +210,20 @@ def query_rewriter(state: AnalysisState, _: AgentContext) -> AnalysisState:
 
 def historical_retriever(state: AnalysisState, context: AgentContext) -> AnalysisState:
     state.evidence_pool = context.retriever.search(state.retrieval_queries, top_k=4)
+    return state
+
+
+def factual_retriever(state: AnalysisState, context: AgentContext) -> AnalysisState:
+    retriever = context.factual_retriever or context.retriever
+    state.evidence_pool = retriever.search(state.retrieval_queries, top_k=4)
+    return state
+
+
+def commentary_retriever(state: AnalysisState, context: AgentContext) -> AnalysisState:
+    if context.commentary_retriever is None:
+        state.evidence_pool = []
+        return state
+    state.evidence_pool = context.commentary_retriever.search(state.retrieval_queries, top_k=4)
     return state
 
 
@@ -151,6 +283,150 @@ def response_composer(state: AnalysisState, _: AgentContext) -> AnalysisState:
         evidence_citations=_build_citations(state),
     )
     return state
+
+
+def factual_response_composer(state: AnalysisState, _: AgentContext) -> AnalysisState:
+    answer = _build_lookup_answer(state, lookup_kind="factual")
+    state.historical_mirrors = _build_lookup_mirrors(state)
+    state.final_output = FinalOutput(
+        user_problem=UserProblem(
+            summary=state.problem_summary,
+            scene_type=state.scene_type,
+            emotion_detected=False,
+            emotion_labels=[],
+            confidence=0.9 if state.evidence_pool else 0.45,
+        ),
+        situation_analysis=SituationAnalysis(
+            overall_judgement=answer,
+            core_conflicts=[],
+            actors=state.actors,
+        ),
+        historical_mirrors=state.historical_mirrors,
+        strategy_report=StrategyReport(
+            main_recommendation=answer,
+            strategy_options=[],
+            do_not_do=[],
+            next_actions_24h=[],
+            next_actions_7d=[],
+        ),
+        mermaid_graph=_fallback_mermaid(state),
+        poetry_comfort=PoetryComfort(triggered=False),
+        evidence_citations=_build_citations(state),
+    )
+    return state
+
+
+def commentary_response_composer(state: AnalysisState, _: AgentContext) -> AnalysisState:
+    answer = _build_lookup_answer(state, lookup_kind="commentary")
+    state.historical_mirrors = _build_lookup_mirrors(state)
+    state.final_output = FinalOutput(
+        user_problem=UserProblem(
+            summary=state.problem_summary,
+            scene_type=state.scene_type,
+            emotion_detected=False,
+            emotion_labels=[],
+            confidence=0.9 if state.evidence_pool else 0.45,
+        ),
+        situation_analysis=SituationAnalysis(
+            overall_judgement=answer,
+            core_conflicts=[],
+            actors=state.actors,
+        ),
+        historical_mirrors=state.historical_mirrors,
+        strategy_report=StrategyReport(
+            main_recommendation=answer,
+            strategy_options=[],
+            do_not_do=[],
+            next_actions_24h=[],
+            next_actions_7d=[],
+        ),
+        mermaid_graph=_fallback_mermaid(state),
+        poetry_comfort=PoetryComfort(triggered=False),
+        evidence_citations=_build_citations(state),
+    )
+    return state
+
+
+def out_of_scope_response_composer(state: AnalysisState, _: AgentContext) -> AnalysisState:
+    answer = (
+        "当前问题与《资治通鉴》史实检索、司马光评论查询、或基于历史映射的组织/管理分析关系不大，"
+        "不建议走本系统的历史检索链路。请改用通用问答，或把问题改写成历史/管理相关版本。"
+    )
+    state.historical_mirrors = []
+    state.final_output = FinalOutput(
+        user_problem=UserProblem(
+            summary=state.problem_summary,
+            scene_type=state.scene_type,
+            emotion_detected=False,
+            emotion_labels=[],
+            confidence=max(state.routing_confidence, 0.85 if state.routing_source == "llm" else 0.65),
+        ),
+        situation_analysis=SituationAnalysis(
+            overall_judgement=answer,
+            core_conflicts=[],
+            actors=[],
+        ),
+        historical_mirrors=[],
+        strategy_report=StrategyReport(
+            main_recommendation="请提出与《资治通鉴》史实、司马光评论或现实管理映射相关的问题。",
+            strategy_options=[],
+            do_not_do=[],
+            next_actions_24h=[],
+            next_actions_7d=[],
+        ),
+        mermaid_graph=_fallback_mermaid(state),
+        poetry_comfort=PoetryComfort(triggered=False),
+        evidence_citations=[],
+    )
+    return state
+
+
+def _pick_intent(text: str) -> str:
+    compact = text.replace(" ", "").strip()
+    if _looks_out_of_scope(compact):
+        return "out_of_scope"
+    if any(pattern in compact for pattern in COMMENTARY_PATTERNS):
+        return "commentary_lookup"
+    if any(hint in compact for hint in ANALYSIS_HINTS):
+        return "analysis"
+    if any(hint in compact for hint in FIRST_PERSON_HINTS):
+        return "analysis"
+    if any(keyword in compact for keyword in FACTUAL_LOOKUP_KEYWORDS):
+        return "factual_lookup"
+    if any(pattern in compact for pattern in FACTUAL_PATTERNS) and len(compact) <= 36:
+        return "factual_lookup"
+    return "analysis"
+
+
+def _looks_out_of_scope(text: str) -> bool:
+    if any(keyword in text for keyword in DOMAIN_HINTS):
+        return False
+    if any(keyword in text for keyword in OUT_OF_SCOPE_HINTS):
+        return True
+    generic_howto_hints = ["怎么做", "如何做", "教程", "步骤", "配方", "食谱", "推荐"]
+    return any(hint in text for hint in generic_howto_hints)
+
+
+def _resolve_intent(text: str, context: AgentContext) -> tuple[str, str, float, str, str]:
+    rule_intent = _pick_intent(text)
+    if context.intent_router is None:
+        return rule_intent, "rule", 0.0, "未启用模型路由，使用规则判断。", ""
+
+    try:
+        decision = context.intent_router.route(text, rule_hint=rule_intent)
+    except Exception as exc:
+        return rule_intent, "rule_fallback", 0.0, f"模型路由失败，已回退规则：{type(exc).__name__}", context.intent_router.model
+
+    if decision.confidence >= context.intent_router.confidence_threshold:
+        return decision.intent_type, "llm", decision.confidence, decision.reason, context.intent_router.model
+
+    return (
+        rule_intent,
+        "rule_fallback",
+        decision.confidence,
+        f"模型置信度不足，回退规则：{decision.reason}",
+        context.intent_router.model,
+    )
 
 
 def _pick_scene(text: str) -> str:
@@ -225,7 +501,13 @@ def _summarize_problem(text: str, scene_type: str) -> str:
     return f"这是一个偏「{scene_type}」的问题：{shortened}"
 
 
-def _overall_judgement(scene_type: str, conflicts: list[str]) -> str:
+def _overall_judgement(scene_type: str, conflicts: list[str], intent_type: str = "analysis") -> str:
+    if intent_type == "factual_lookup":
+        return "当前问题更像客观事实查询，适合直接检索相关史实证据。"
+    if intent_type == "commentary_lookup":
+        return "当前问题更像史臣评论查询，适合优先检索司马光等观察者评论。"
+    if intent_type == "out_of_scope":
+        return "当前问题不在《资治通鉴》检索与历史映射分析的适用范围内。"
     if scene_type == "情绪恢复":
         return "当前重点不是立刻做重大决定，而是先降低情绪消耗，再把问题拆成可验证事实。"
     return f"当前局势的关键不是单点对错，而是处理「{conflicts[0]}」时避免让关系结构进一步失衡。"
@@ -328,6 +610,21 @@ def _build_historical_mirrors(state: AnalysisState) -> list[HistoricalMirror]:
     return mirrors
 
 
+def _build_lookup_mirrors(state: AnalysisState) -> list[HistoricalMirror]:
+    mirrors = []
+    for chunk in state.evidence_pool[:4]:
+        mirrors.append(
+            HistoricalMirror(
+                title=chunk.chapter_title or chunk.chunk_id,
+                source_type=chunk.chunk_type,
+                excerpt=_lookup_excerpt(chunk, state.user_input),
+                mapping_reason="这是与当前查询最相关的直接史料证据。" if chunk.chunk_type != "commentary" else "这是与当前查询最相关的史臣评论证据。",
+                confidence=min(0.95, 0.45 + chunk.score / 3),
+            )
+        )
+    return mirrors
+
+
 def _evidence_excerpt(chunk) -> str:
     text = chunk.white_text or chunk.retrieval_text or chunk.original_text or chunk.annotation_text
     text = text.replace("\n", " ").strip()
@@ -344,6 +641,61 @@ def _mapping_reason(chunk, scene_type: str) -> str:
     if scene_type in {"团队冲突", "用人与授权"} and "用人" in chunk.topic_tags:
         return "该史例对应关键岗位、授权与问责问题，可映射到现代团队管理。"
     return "该史例与当前问题在权力关系、信任边界或行动时机上存在可借鉴的结构相似性，但不能机械套用。"
+
+
+def _build_lookup_answer(state: AnalysisState, lookup_kind: str) -> str:
+    if not state.evidence_pool:
+        if lookup_kind == "commentary":
+            return "当前未检索到足以支持回答的司马光评论证据。"
+        return "当前未检索到足以支持回答的直接史实证据。"
+
+    top = state.evidence_pool[0]
+    excerpt = _lookup_excerpt(top, state.user_input)
+    if lookup_kind == "commentary":
+        return f"根据当前检索，最相关的史臣评论来自“{top.chapter_title or top.chunk_id}”：{excerpt}"
+    return f"根据当前检索，最相关的史实证据来自“{top.chapter_title or top.chunk_id}”：{excerpt}"
+
+
+def _lookup_excerpt(chunk, query: str) -> str:
+    text = (chunk.white_text or chunk.retrieval_text or chunk.original_text or chunk.annotation_text).strip()
+    if not text:
+        return ""
+
+    sentences = [match.group(0).strip() for match in LOOKUP_SENTENCE_RE.finditer(text) if match.group(0).strip()]
+    if not sentences:
+        return _evidence_excerpt(chunk)
+
+    for term in _extract_lookup_terms(query):
+        for index, sentence in enumerate(sentences):
+            if term not in sentence:
+                continue
+            window = sentences[max(0, index - 1) : min(len(sentences), index + 2)]
+            excerpt = "".join(window).replace("\n", " ").strip()
+            if len(excerpt) <= 280:
+                return excerpt
+            return f"{excerpt[:277]}..."
+    return _evidence_excerpt(chunk)
+
+
+def _extract_lookup_terms(query: str) -> list[str]:
+    compact = query.replace(" ", "").strip()
+    cleaned = compact
+    for noise in sorted(LOOKUP_NOISE_TERMS, key=len, reverse=True):
+        cleaned = cleaned.replace(noise, " ")
+    cleaned = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9_]+", " ", cleaned)
+
+    terms: set[str] = set()
+    for token in re.findall(r"[\u4e00-\u9fff]{2,12}|[A-Za-z0-9_]{2,}", cleaned):
+        if re.fullmatch(r"[\u4e00-\u9fff]+", token):
+            if 2 <= len(token) <= 4:
+                terms.add(token)
+            elif len(token) > 4:
+                for size in range(2, min(4, len(token)) + 1):
+                    for index in range(len(token) - size + 1):
+                        terms.add(token[index : index + size])
+        else:
+            terms.add(token)
+    return sorted(terms, key=len, reverse=True)
 
 
 def _build_mermaid(state: AnalysisState) -> str:

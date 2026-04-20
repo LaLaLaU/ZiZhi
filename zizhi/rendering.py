@@ -9,6 +9,44 @@ from zizhi.schemas import FinalOutput
 
 
 def final_output_to_markdown(output: FinalOutput) -> str:
+    if output.user_problem.scene_type == "域外问题":
+        return "\n".join(
+            [
+                f"# 资智适用范围提示（{output.template_version}）",
+                "",
+                "## 查询摘要",
+                output.user_problem.summary,
+                "",
+                "## 判断结果",
+                output.situation_analysis.overall_judgement,
+                "",
+                "## 可尝试的改写方向",
+                "- 如果你想查《资治通鉴》史实，可以问：某人做过什么、某事是谁做的、某年发生了什么。",
+                "- 如果你想查评论，可以问：司马光怎么看某人或某事。",
+                "- 如果你想做现实管理分析，可以把问题改写成组织、用人、权力边界、汇报沟通、团队冲突等场景。",
+            ]
+        )
+
+    if output.user_problem.scene_type in {"客观事实查询", "史臣评论查询"}:
+        mirrors = "\n".join(
+            f"- {mirror.title}（{mirror.source_type}）：{mirror.mapping_reason}"
+            for mirror in output.historical_mirrors
+        )
+        return "\n".join(
+            [
+                f"# 资智检索结果（{output.template_version}）",
+                "",
+                "## 查询摘要",
+                output.user_problem.summary,
+                "",
+                "## 检索结论",
+                output.situation_analysis.overall_judgement,
+                "",
+                "## 相关证据",
+                mirrors or "- 暂未检索到足够证据",
+            ]
+        )
+
     actors = "\n".join(
         f"- {actor.name}：{actor.role}；目标：{actor.goal or '待确认'}；风险：{actor.risk or '待确认'}"
         for actor in output.situation_analysis.actors

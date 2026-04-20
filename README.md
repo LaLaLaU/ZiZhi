@@ -22,6 +22,43 @@ streamlit run app.py
 
 默认不依赖外部模型，适合先跑通 Demo 流程。
 
+## 可选：启用模型做意图路由
+
+项目现在支持“规则路由 + 模型路由 + 失败回退规则”的混合模式。
+
+只要系统环境里存在对应供应商的 API key，工作流初始化时会自动尝试启用路由模型；若请求失败或置信度不足，会自动回退到本地规则判断。
+
+DeepSeek 示例：
+
+```powershell
+$env:DEEPSEEK_API_KEY="***"
+$env:ZIZHI_ROUTER_ENABLED="1"
+$env:ZIZHI_ROUTER_PROVIDER="deepseek"
+$env:ZIZHI_ROUTER_MODEL="deepseek-chat"
+$env:ZIZHI_ROUTER_BASE_URL="https://api.deepseek.com"
+$env:ZIZHI_ROUTER_CONFIDENCE_THRESHOLD="0.72"
+$env:ZIZHI_ROUTER_TIMEOUT_SECONDS="20"
+```
+
+火山方舟示例：
+
+```powershell
+$env:ARK_API_KEY="***"
+$env:ZIZHI_ROUTER_ENABLED="1"
+$env:ZIZHI_ROUTER_PROVIDER="ark"
+$env:ZIZHI_ROUTER_MODEL="doubao-seed-2-0-mini-260215"
+$env:ZIZHI_ROUTER_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
+$env:ZIZHI_ROUTER_CONFIDENCE_THRESHOLD="0.72"
+$env:ZIZHI_ROUTER_TIMEOUT_SECONDS="20"
+```
+
+说明：
+
+- `DEEPSEEK_API_KEY`：推荐直接配置为系统环境变量，不要写进代码。
+- `ARK_API_KEY`：火山方舟 API key，推荐直接配置为系统环境变量，不要写进代码。
+- `ZIZHI_ROUTER_CONFIDENCE_THRESHOLD`：低于该值时，模型结果不会直接采用，而是回退规则路由。
+- 目前路由只做三分类：`factual_lookup`、`commentary_lookup`、`analysis`。
+
 ## 本地书籍资源
 
 - 当前正式语料使用 `sources/资治通鉴txt版 中华书局2012年18册 沈志华 张宏儒 传世经典·文白对照`。
