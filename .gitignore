@@ -1,5 +1,6 @@
 .env
 .venv/
+.conda/
 __pycache__/
 .pytest_cache/
 .cache/case_runs/
