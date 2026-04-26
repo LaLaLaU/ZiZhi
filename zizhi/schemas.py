@@ -7,11 +7,14 @@ from pydantic import BaseModel, Field
 
 SourceType = Literal["original", "chen_guang_yue", "commentary"]
 EvidenceUsage = Literal["support", "contrast", "caution"]
+PerspectiveType = Literal["manager", "subordinate", "peer", "observer", "unknown"]
+CaseType = Literal["decision", "relationship", "risk", "governance", "negotiation", "mixed"]
 
 
 class Actor(BaseModel):
     name: str
     role: str = ""
+    stance: str = ""
     goal: str = ""
     risk: str = ""
 
@@ -63,6 +66,40 @@ class HistoricalMirror(BaseModel):
     excerpt: str
     mapping_reason: str
     confidence: float = 0.0
+
+
+class PerspectiveProfile(BaseModel):
+    perspective_type: PerspectiveType = "unknown"
+    perspective_summary: str = ""
+    event_labels: list[str] = Field(default_factory=list)
+    risk_labels: list[str] = Field(default_factory=list)
+    strategy_labels: list[str] = Field(default_factory=list)
+    modern_scenes: list[str] = Field(default_factory=list)
+    evidence_section_keys: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+
+
+class CaseProfile(BaseModel):
+    case_id: str
+    title: str
+    summary: str = ""
+    case_type: CaseType = "mixed"
+    section_keys: list[str] = Field(default_factory=list)
+    chunk_ids: list[str] = Field(default_factory=list)
+    start_volume_no: int | None = None
+    end_volume_no: int | None = None
+    start_year: str = ""
+    end_year: str = ""
+    actors: list[Actor] = Field(default_factory=list)
+    perspectives: list[PerspectiveProfile] = Field(default_factory=list)
+    decision_actor: str = ""
+    core_conflict: str = ""
+    trigger: str = ""
+    outcome: str = ""
+    transferable_pattern: str = ""
+    case_tags: list[str] = Field(default_factory=list)
+    source_priority: float = 0.5
+    case_worthy_score: float = 0.0
 
 
 class StrategyOption(BaseModel):

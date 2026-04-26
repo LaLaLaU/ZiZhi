@@ -128,6 +128,7 @@
 - 一个 `CaseProfile` 可以跨 section、跨 year、跨 volume
 - `perspectives` 是 `PerspectiveProfile` 列表
 - 同一个 case 可以在不同视角下拥有不同标签
+- `actors.role` 表达人物在案例结构中的现代可映射位置，不写成单纯古代官职
 
 ### 3.5 RetrievedEvidence
 

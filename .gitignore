@@ -2,3 +2,9 @@
 .venv/
 __pycache__/
 .pytest_cache/
+.cache/case_runs/
+.cache/tagging_runs/
+.cache/white_only_remaining.jsonl
+.cache/zizhi_original_only_outliers.csv
+.cache/zizhi_txt_volume_lengths.csv
+.cache/zizhi_txt_white_lengths.csv

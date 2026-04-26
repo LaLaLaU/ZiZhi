@@ -1,0 +1,53 @@
+现在请基于下面输入抽取故事案例。
+
+补充约束：
+1. 最多输出 3 个 case。
+2. 如果没有明确 case-worthy 主线，允许输出空数组。
+3. 同一 chunk 内不要重复输出高度重合的 case。
+4. 尽量优先输出“现代人一眼能看懂有什么用”的案例，而不是历史背景很重但难迁移的案例。
+5. title 要简短明确，避免空泛词。
+6. transferable_pattern 必须具体，不要写成“要审时度势”“要谨慎”这类空话。
+
+输出 JSON schema：
+{
+  "chunk_id": "string",
+  "section_keys": ["string"],
+  "cases": [
+    {
+      "title": "string",
+      "summary": "string",
+      "case_type": "decision|negotiation|governance|relationship|risk|mixed",
+      "section_keys": ["string"],
+      "decision_actor": "string",
+      "actors": [
+        {
+          "name": "string",
+          "role": "现代可映射结构角色，不要只写古代官职",
+          "stance": "string"
+        }
+      ],
+      "core_conflict": "string",
+      "trigger": "string",
+      "outcome": "string",
+      "transferable_pattern": "string",
+      "case_tags": ["string"],
+      "perspectives": [
+        {
+          "perspective_type": "manager|subordinate|peer|observer|unknown",
+          "perspective_summary": "string",
+          "event_labels": ["string"],
+          "risk_labels": ["string"],
+          "strategy_labels": ["string"],
+          "modern_scenes": ["string"],
+          "evidence_section_keys": ["string"],
+          "confidence": 0.0
+        }
+      ],
+      "case_worthy_score": 0.0
+    }
+  ],
+  "global_notes": ["string"]
+}
+
+输入 JSON：
+{{INPUT_JSON}}

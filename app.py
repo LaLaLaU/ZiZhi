@@ -13,11 +13,11 @@ st.set_page_config(page_title="资智 ZiZhi", page_icon="📜", layout="wide")
 
 def main() -> None:
     st.title("📜 资智 ZiZhi")
-    st.caption("基于《资治通鉴》的 AI 决策幕僚系统 · V1 本地 Demo")
+    st.caption("基于《资治通鉴》的历史案例映射系统 · V1 本地 Demo")
 
     with st.sidebar:
         st.header("使用边界")
-        st.write("先判断局势，再映射史例，最后给可执行建议。")
+        st.write("先判断局势，再定位相关案例，最后回查史料并给可执行建议。")
         st.write("不做法律、心理咨询、HR 合规结论，也不承诺精确预测。")
 
     user_input = st.text_area(
@@ -28,7 +28,7 @@ def main() -> None:
     submitted = st.button("开始分析", type="primary", disabled=not user_input.strip())
 
     if not submitted:
-        st.info("输入一段真实场景，系统会输出幕僚报告、Mermaid 博弈图、史料依据与必要的诗词抚慰。")
+        st.info("输入一段真实场景，系统会输出幕僚报告、相关历史案例、史料依据与必要的诗词抚慰。")
         return
 
     status_box = st.container(border=True)

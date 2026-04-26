@@ -14,7 +14,7 @@
 辅助脚本：
 
 - `scripts/build_corpus.py`
-- `scripts/analyze_txt_corpus.py`
+- `scripts/archive/analyze_txt_corpus.py`
 - `zizhi/txt_ingest.py`
 
 ## 3. 入库目标层级
@@ -89,7 +89,7 @@
 
 ## 5. 当前数据快照
 
-基于 `.cache/zizhi_txt_white_lengths.csv` 的最近一次分析：
+以下数值来自历史分析快照，用于说明语料规模与清洗效果，不要求在 `.cache/` 中长期保留对应分析文件：
 
 - 总卷数：`294`
 - 白话文总字数：`4,956,659`

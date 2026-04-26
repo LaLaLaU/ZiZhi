@@ -34,12 +34,12 @@ def final_output_to_markdown(output: FinalOutput) -> str:
         )
         return "\n".join(
             [
-                f"# 资智检索结果（{output.template_version}）",
+                f"# 资智史料查询结果（{output.template_version}）",
                 "",
                 "## 查询摘要",
                 output.user_problem.summary,
                 "",
-                "## 检索结论",
+                "## 查询结论",
                 output.situation_analysis.overall_judgement,
                 "",
                 "## 相关证据",
@@ -94,8 +94,8 @@ def final_output_to_markdown(output: FinalOutput) -> str:
             "## 人物与关系判断",
             actors or "- 暂未识别关键角色",
             "",
-            "## 《资治通鉴》历史镜像",
-            mirrors or "- 检索较弱，本轮仅能给出保守类比",
+            "## 《资治通鉴》相关案例",
+            mirrors or "- 当前案例证据较弱，本轮仅能给出保守类比",
             "",
             "## 策略建议",
             output.strategy_report.main_recommendation,
