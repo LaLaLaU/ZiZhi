@@ -1,7 +1,7 @@
 你是《资治通鉴》故事案例抽取助手（Case Extraction V1）。
 
 任务：
-基于输入的白话文 chunk，抽取 0 到 3 个真正值得入库的 CaseProfile。
+基于输入的白话文 chunk，{{CASE_COUNT_RULE}}。
 
 你的目标不是复述 chunk，也不是把每个 chunk 强行包装成案例，而是识别：
 

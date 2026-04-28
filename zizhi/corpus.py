@@ -5,13 +5,14 @@ import os
 from pathlib import Path
 
 from zizhi.epub_ingest import load_chunks_jsonl, parse_epub_to_chunks, write_chunks_jsonl
-from zizhi.schemas import HistoricalChunk
+from zizhi.schemas import CaseProfile, HistoricalChunk
 from zizhi.txt_ingest import parse_txt_corpus_to_chunks, write_chunks_jsonl as write_txt_chunks_jsonl
 
 
 DEFAULT_CACHE_PATH = Path(".cache") / "zizhi_corpus_chunks.jsonl"
 DEFAULT_TAGGING_CHUNK_CACHE_PATH = Path(".cache") / "zizhi_tagging_chunks.jsonl"
 DEFAULT_SIMAGUANG_COMMENTARY_CACHE_PATH = Path(".cache") / "zizhi_simaguang_commentaries.jsonl"
+DEFAULT_CASE_PROFILE_CACHE_PATH = Path(".cache") / "case_runs" / "case-corpus-through5033" / "case_profiles.jsonl"
 
 
 SEED_CORPUS: list[HistoricalChunk] = [
@@ -127,88 +128,98 @@ def load_corpus(path: str | Path | None = None) -> list[HistoricalChunk]:
 
 def load_simaguang_commentary_corpus(path: str | Path | None = None) -> list[HistoricalChunk]:
     commentary_path = Path(path) if path is not None else DEFAULT_SIMAGUANG_COMMENTARY_CACHE_PATH
+    commentary_path = _resolve_json_family_path(commentary_path)
     if not commentary_path.exists() or commentary_path.stat().st_size == 0:
         return []
 
     chunks: list[HistoricalChunk] = []
-    with commentary_path.open("r", encoding="utf-8") as file:
-        for line in file:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            row = json.loads(stripped)
-            commentary_text = row.get("commentary_text", "")
-            source_section_key = row.get("source_section_key", "")
-            chunks.append(
-                HistoricalChunk(
-                    chunk_id=row.get("commentary_id", ""),
-                    volume_no=row.get("volume_no"),
-                    volume=row.get("volume_title", ""),
-                    year=row.get("year_title", ""),
-                    chapter_title=row.get("chapter_title", ""),
-                    chunk_type="commentary",
-                    section_key=source_section_key,
-                    section_keys=[source_section_key] if source_section_key else [],
-                    retrieval_text=commentary_text,
-                    white_char_count=int(row.get("commentary_char_count", len(commentary_text))),
-                    section_count=1 if source_section_key else 0,
-                    chunk_version=row.get("commentary_version", ""),
-                    white_text=commentary_text,
-                    annotation_text=f"author:{row.get('author', '司马光')}",
-                    text=commentary_text,
-                    people=[row.get("author", "司马光")],
-                    events=["史臣评论"],
-                    topic_tags=["评论", "评价", "观察"],
-                    situation_tags=["observer"],
-                    source_priority=0.86,
-                )
+    for row in _load_json_family_rows(commentary_path):
+        commentary_text = row.get("commentary_text", "")
+        source_section_key = row.get("source_section_key", "")
+        chunks.append(
+            HistoricalChunk(
+                chunk_id=row.get("commentary_id", ""),
+                volume_no=row.get("volume_no"),
+                volume=row.get("volume_title", ""),
+                year=row.get("year_title", ""),
+                chapter_title=row.get("chapter_title", ""),
+                chunk_type="commentary",
+                section_key=source_section_key,
+                section_keys=[source_section_key] if source_section_key else [],
+                retrieval_text=commentary_text,
+                white_char_count=int(row.get("commentary_char_count", len(commentary_text))),
+                section_count=1 if source_section_key else 0,
+                chunk_version=row.get("commentary_version", ""),
+                white_text=commentary_text,
+                annotation_text=f"author:{row.get('author', '司马光')}",
+                text=commentary_text,
+                people=[row.get("author", "司马光")],
+                events=["史臣评论"],
+                topic_tags=["评论", "评价", "观察"],
+                situation_tags=["observer"],
+                source_priority=0.86,
             )
+        )
     return chunks
 
 
 def load_tagging_chunk_corpus(path: str | Path | None = None) -> list[HistoricalChunk]:
     tagging_path = Path(path) if path is not None else DEFAULT_TAGGING_CHUNK_CACHE_PATH
+    tagging_path = _resolve_json_family_path(tagging_path)
     if not tagging_path.exists() or tagging_path.stat().st_size == 0:
         return []
 
     chunks: list[HistoricalChunk] = []
-    with tagging_path.open("r", encoding="utf-8") as file:
-        for line in file:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            row = json.loads(stripped)
-            white_text = row.get("white_text", "")
-            chapter_title = row.get("chapter_title", "")
-            year_title = row.get("year_title", "")
-            retrieval_text = " ".join(part for part in [chapter_title, year_title, white_text] if part)
-            section_keys = [key for key in row.get("section_keys", []) if key]
-            commentary_ids = [key for key in row.get("commentary_ids", []) if key]
-            chunks.append(
-                HistoricalChunk(
-                    chunk_id=row.get("chunk_id", ""),
-                    volume_no=row.get("volume_no"),
-                    volume=row.get("volume_title", ""),
-                    year=year_title,
-                    chapter_title=chapter_title,
-                    chunk_type="original",
-                    section_key=section_keys[0] if section_keys else "",
-                    section_keys=section_keys,
-                    retrieval_text=retrieval_text,
-                    white_char_count=int(row.get("white_char_count", len(white_text))),
-                    section_count=int(row.get("section_count", len(section_keys))),
-                    chunk_version=row.get("chunk_version", ""),
-                    white_text=white_text,
-                    annotation_text=f"linked_commentaries:{','.join(commentary_ids)}" if commentary_ids else "",
-                    text=retrieval_text or white_text,
-                    people=[],
-                    events=[],
-                    topic_tags=[],
-                    situation_tags=[],
-                    source_priority=0.88,
-                )
+    for row in _load_json_family_rows(tagging_path):
+        white_text = row.get("white_text", "")
+        chapter_title = row.get("chapter_title", "")
+        year_title = row.get("year_title", "")
+        retrieval_text = " ".join(part for part in [chapter_title, year_title, white_text] if part)
+        section_keys = [key for key in row.get("section_keys", []) if key]
+        commentary_ids = [key for key in row.get("commentary_ids", []) if key]
+        chunks.append(
+            HistoricalChunk(
+                chunk_id=row.get("chunk_id", ""),
+                volume_no=row.get("volume_no"),
+                volume=row.get("volume_title", ""),
+                year=year_title,
+                chapter_title=chapter_title,
+                chunk_type="original",
+                section_key=section_keys[0] if section_keys else "",
+                section_keys=section_keys,
+                retrieval_text=retrieval_text,
+                white_char_count=int(row.get("white_char_count", len(white_text))),
+                section_count=int(row.get("section_count", len(section_keys))),
+                chunk_version=row.get("chunk_version", ""),
+                white_text=white_text,
+                annotation_text=f"linked_commentaries:{','.join(commentary_ids)}" if commentary_ids else "",
+                text=retrieval_text or white_text,
+                people=[],
+                events=[],
+                topic_tags=[],
+                situation_tags=[],
+                source_priority=0.88,
             )
+        )
     return chunks
+
+
+def load_case_profile_corpus(path: str | Path | None = None) -> list[CaseProfile]:
+    configured_path = Path(os.getenv("ZIZHI_CASE_CORPUS_PATH")) if os.getenv("ZIZHI_CASE_CORPUS_PATH") else None
+    case_path = Path(path) if path is not None else (configured_path or DEFAULT_CASE_PROFILE_CACHE_PATH)
+    resolved_path = _resolve_json_family_path(case_path)
+    if not resolved_path.exists() or resolved_path.stat().st_size == 0:
+        return []
+    rows = _load_json_family_rows(resolved_path)
+    cases: list[CaseProfile] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            cases.append(CaseProfile.model_validate(row))
+        except Exception:
+            continue
+    return cases
 
 
 def _load_from_path(path: Path) -> list[HistoricalChunk]:
@@ -269,3 +280,31 @@ def _load_or_build_txt_cache(corpus_root: Path) -> list[HistoricalChunk]:
         write_txt_chunks_jsonl(chunks, cache_path)
         return chunks
     return SEED_CORPUS
+
+
+def _resolve_json_family_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    if path.suffix == ".jsonl":
+        json_path = path.with_suffix(".json")
+        if json_path.exists():
+            return json_path
+    if path.suffix == ".json":
+        jsonl_path = path.with_suffix(".jsonl")
+        if jsonl_path.exists():
+            return jsonl_path
+    return path
+
+
+def _load_json_family_rows(path: Path) -> list[dict]:
+    if path.suffix == ".json":
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        data = json.loads(text)
+        return data if isinstance(data, list) else []
+    return [json.loads(line) for line in text.splitlines() if line.strip()]

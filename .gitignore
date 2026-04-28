@@ -4,8 +4,15 @@
 __pycache__/
 .pytest_cache/
 .cache/case_runs/
+.cache/case_dense_vectors/
+.cache/case_experiments/
+.cache/models/
+.cache/hf_home/
+.cache/pip_tmp/
 .cache/tagging_runs/
 .cache/white_only_remaining.jsonl
 .cache/zizhi_original_only_outliers.csv
 .cache/zizhi_txt_volume_lengths.csv
 .cache/zizhi_txt_white_lengths.csv
+.claude/settings.local.json
+test_weight*.py

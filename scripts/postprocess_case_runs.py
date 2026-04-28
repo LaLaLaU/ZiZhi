@@ -19,7 +19,7 @@ DEFAULT_CHUNKS_PATH = ROOT / ".cache" / "zizhi_tagging_chunks.jsonl"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Postprocess case runs with role normalization, sorting, and conservative dedupe/merge.")
-    parser.add_argument("--chunks", type=Path, default=DEFAULT_CHUNKS_PATH, help="Path to tagging chunks JSONL.")
+    parser.add_argument("--chunks", type=Path, default=DEFAULT_CHUNKS_PATH, help="Path to tagging chunks JSON/JSONL.")
     parser.add_argument("--run-dir", action="append", type=Path, required=True, help="Run directory to process. Repeat for multiple runs.")
     parser.add_argument("--output-run-dir", type=Path, default=None, help="Optional output directory for a consolidated corpus.")
     return parser.parse_args()

@@ -179,15 +179,24 @@ $env:ZIZHI_CORPUS_PATH="sources\新的资治通鉴资源.epub"
 python scripts/build_corpus.py
 ```
 
-## 可选：启用 LanceDB + bge-m3
+## 可选：启用 LanceDB + case dense 检索
 
 ```powershell
 $env:ZIZHI_ENABLE_LANCEDB="1"
 $env:ZIZHI_EMBEDDING_MODEL="BAAI/bge-m3"
+
+$env:ZIZHI_CASE_ENABLE_DENSE="1"
+$env:ZIZHI_CASE_EMBEDDING_MODEL="BAAI/bge-large-zh-v1.5"
+$env:ZIZHI_CASE_LANCEDB_PATH=".zizhi_case_lancedb"
 streamlit run app.py
 ```
 
-首次加载 bge-m3 可能需要下载模型。若模型或 LanceDB 不可用，系统会自动降级到内存关键词检索。
+说明：
+
+- `ZIZHI_ENABLE_LANCEDB` / `ZIZHI_EMBEDDING_MODEL`：控制旧的 chunk 检索向量化能力。
+- `ZIZHI_CASE_ENABLE_DENSE` / `ZIZHI_CASE_EMBEDDING_MODEL`：控制新的 case-first dense 检索。
+- 当前 case dense 默认模型为 `BAAI/bge-large-zh-v1.5`，用于 `title + transferable_pattern` 的语义召回。
+- 首次加载模型可能需要下载；若模型或 LanceDB 不可用，系统会自动降级到无向量模式继续工作。
 
 注意：embedding / LanceDB 只服务“找材料更稳”，并不改变项目最终以 `case library` 为中心的方向。
 

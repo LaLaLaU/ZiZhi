@@ -102,6 +102,26 @@ class CaseProfile(BaseModel):
     case_worthy_score: float = 0.0
 
 
+class RetrievedCase(BaseModel):
+    case_id: str
+    title: str
+    summary: str = ""
+    case_type: CaseType = "mixed"
+    section_keys: list[str] = Field(default_factory=list)
+    chunk_ids: list[str] = Field(default_factory=list)
+    decision_actor: str = ""
+    core_conflict: str = ""
+    transferable_pattern: str = ""
+    case_tags: list[str] = Field(default_factory=list)
+    actor_roles: list[str] = Field(default_factory=list)
+    retrieval_score: float = 0.0
+    retrieval_text: str = ""
+    matched_terms: list[str] = Field(default_factory=list)
+    matched_fields: list[str] = Field(default_factory=list)
+    mapping_reason: str = ""
+    source_priority: float = 0.0
+
+
 class StrategyOption(BaseModel):
     name: str
     applicable_when: str
@@ -158,6 +178,7 @@ class AnalysisState(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     emotion_labels: list[str] = Field(default_factory=list)
     retrieval_queries: list[str] = Field(default_factory=list)
+    case_matches: list[RetrievedCase] = Field(default_factory=list)
     evidence_pool: list[HistoricalChunk] = Field(default_factory=list)
     situation_analysis: SituationAnalysis = Field(default_factory=SituationAnalysis)
     historical_mirrors: list[HistoricalMirror] = Field(default_factory=list)

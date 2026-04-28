@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import json
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -183,7 +185,7 @@ def main() -> None:
     )
 
     first_payload = build_payload(rows[0])
-    first_messages = build_case_extraction_messages(first_payload, version=args.prompt_version)
+    first_messages = build_case_extraction_messages(first_payload, version=args.prompt_version, max_cases=args.max_cases)
     (run_dir / "sample_prompt_system.txt").write_text(first_messages["system_prompt"], encoding="utf-8")
     (run_dir / "sample_prompt_user.txt").write_text(first_messages["user_prompt"], encoding="utf-8")
 
@@ -198,7 +200,6 @@ def main() -> None:
     if not api_key:
         raise SystemExit(f"Missing API key environment variable: {api_key_env}")
 
-    client = OpenAI(api_key=api_key, base_url=base_url or None, timeout=args.timeout_seconds)
     existing_chunk_ids = load_existing_completed_chunk_ids(run_dir) if args.resume else set()
 
     completed = 0
@@ -206,6 +207,7 @@ def main() -> None:
     failed = 0
     accepted_cases = 0
     started_at = time.perf_counter()
+    client_state = threading.local()
 
     with (
         (run_dir / "case_profiles.jsonl").open("a", encoding="utf-8") as case_file,
@@ -213,118 +215,67 @@ def main() -> None:
         (run_dir / "raw_responses.jsonl").open("a", encoding="utf-8") as raw_file,
         (run_dir / "errors.jsonl").open("a", encoding="utf-8") as errors_file,
     ):
+        pending_rows: list[tuple[int, dict[str, Any]]] = []
         for offset, chunk_row in enumerate(rows, start=1):
             chunk_id = str(chunk_row.get("chunk_id", ""))
             if args.resume and chunk_id in existing_chunk_ids:
                 skipped += 1
                 print(f"[{offset}/{len(rows)}] SKIP {chunk_id}")
                 continue
+            pending_rows.append((offset, chunk_row))
 
-            payload = build_payload(chunk_row)
-            messages = build_case_extraction_messages(payload, version=args.prompt_version)
-            if args.save_prompts:
-                prompt_dir = run_dir / "prompts"
-                prompt_dir.mkdir(parents=True, exist_ok=True)
-                (prompt_dir / f"{chunk_id}.system.txt").write_text(messages["system_prompt"], encoding="utf-8")
-                (prompt_dir / f"{chunk_id}.user.txt").write_text(messages["user_prompt"], encoding="utf-8")
+        with ThreadPoolExecutor(max_workers=max(1, args.concurrency)) as executor:
+            future_to_job: dict[Future[dict[str, Any]], tuple[int, dict[str, Any]]] = {}
 
-            try:
-                last_parse_exc: Exception | None = None
-                for parse_attempt in range(args.max_retries + 1):
-                    elapsed, raw_content, usage = call_model(
-                        client=client,
-                        model=args.model,
-                        system_prompt=messages["system_prompt"],
-                        user_prompt=messages["user_prompt"],
-                        temperature=args.temperature,
-                        max_tokens=args.max_tokens,
-                        json_mode=not args.disable_json_mode,
-                        system_as_user=args.system_as_user,
-                        max_retries=args.max_retries,
-                        retry_sleep_seconds=args.retry_sleep_seconds,
-                    )
-                    try:
-                        parsed = parse_json_content(raw_content)
-                        break
-                    except Exception as exc:
-                        last_parse_exc = exc
-                        if parse_attempt >= args.max_retries:
-                            raise
-                        time.sleep(args.retry_sleep_seconds)
-                else:
-                    raise last_parse_exc if last_parse_exc is not None else ValueError("Failed to parse model response.")
-                cases = [item for item in parsed.get("cases", []) if isinstance(item, dict)]
-                accepted = 0
-                for index, case_row in enumerate(cases, start=1):
-                    score = safe_float(case_row.get("case_worthy_score"))
-                    if score < args.min_case_worthy_score:
-                        continue
-                    normalized = normalize_case_row(
-                        chunk_id=chunk_id,
-                        chunk_row=chunk_row,
-                        case_row=case_row,
-                        model=args.model,
-                        provider=args.provider,
-                        prompt_version=args.prompt_version,
-                        usage=usage,
-                        elapsed=elapsed,
-                        case_index=index,
-                    )
-                    case_file.write(json.dumps(normalized, ensure_ascii=False) + "\n")
-                    accepted += 1
-                case_file.flush()
-
-                chunk_outputs_file.write(
-                    json.dumps(
-                        {
-                            "chunk_id": chunk_id,
-                            "cases_returned": len(cases),
-                            "cases_accepted": accepted,
-                            "global_notes": parsed.get("global_notes", []),
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
+            def submit_job(job: tuple[int, dict[str, Any]]) -> None:
+                future = executor.submit(
+                    process_chunk_row,
+                    args=args,
+                    chunk_row=job[1],
+                    offset=job[0],
+                    total=len(rows),
+                    run_dir=run_dir,
+                    api_key=api_key,
+                    base_url=base_url,
+                    client_state=client_state,
                 )
-                chunk_outputs_file.flush()
+                future_to_job[future] = job
 
-                raw_file.write(
-                    json.dumps(
-                        {
-                            "chunk_id": chunk_id,
-                            "model": args.model,
-                            "provider": args.provider,
-                            "elapsed_seconds": round(elapsed, 3),
-                            "usage": usage,
-                            "content": raw_content,
-                        },
-                        ensure_ascii=False,
+            for job in pending_rows:
+                submit_job(job)
+                if args.sleep_seconds > 0:
+                    time.sleep(args.sleep_seconds)
+                if len(future_to_job) >= max(1, args.concurrency):
+                    done, _ = wait(set(future_to_job), return_when=FIRST_COMPLETED)
+                    for future in done:
+                        result = future.result()
+                        future_to_job.pop(future, None)
+                        completed, failed, accepted_cases = write_chunk_result(
+                            result=result,
+                            case_file=case_file,
+                            chunk_outputs_file=chunk_outputs_file,
+                            raw_file=raw_file,
+                            errors_file=errors_file,
+                            completed=completed,
+                            failed=failed,
+                            accepted_cases=accepted_cases,
+                        )
+
+            while future_to_job:
+                done, _ = wait(set(future_to_job), return_when=FIRST_COMPLETED)
+                for future in done:
+                    result = future.result()
+                    future_to_job.pop(future, None)
+                    completed, failed, accepted_cases = write_chunk_result(
+                        result=result,
+                        case_file=case_file,
+                        chunk_outputs_file=chunk_outputs_file,
+                        raw_file=raw_file,
+                        errors_file=errors_file,
+                        completed=completed,
+                        failed=failed,
+                        accepted_cases=accepted_cases,
                     )
-                    + "\n"
-                )
-                raw_file.flush()
-
-                completed += 1
-                accepted_cases += accepted
-                print(f"[{offset}/{len(rows)}] OK {chunk_id} cases={accepted} {elapsed:.2f}s")
-            except Exception as exc:
-                failed += 1
-                errors_file.write(
-                    json.dumps(
-                        {
-                            "chunk_id": chunk_id,
-                            "error_type": type(exc).__name__,
-                            "error": str(exc),
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
-                errors_file.flush()
-                print(f"[{offset}/{len(rows)}] FAIL {chunk_id}: {type(exc).__name__}: {exc}")
-
-            if args.sleep_seconds > 0:
-                time.sleep(args.sleep_seconds)
 
     total_elapsed = time.perf_counter() - started_at
     summary = {
@@ -345,7 +296,7 @@ def main() -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Batch extract story-level case profiles directly from tagging chunks.")
-    parser.add_argument("--chunks", type=Path, default=DEFAULT_CHUNKS_PATH, help="Path to tagging chunks JSONL.")
+    parser.add_argument("--chunks", type=Path, default=DEFAULT_CHUNKS_PATH, help="Path to tagging chunks JSON/JSONL.")
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT, help="Directory for case extraction runs.")
     parser.add_argument("--run-name", default="", help="Optional run directory name.")
     parser.add_argument("--provider", choices=sorted(PROVIDER_DEFAULTS), default="openai")
@@ -359,6 +310,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--max-tokens", type=int, default=4000)
     parser.add_argument("--timeout-seconds", type=float, default=90.0)
+    parser.add_argument("--concurrency", type=int, default=1, help="Number of chunks to process in parallel.")
     parser.add_argument("--sleep-seconds", type=float, default=0.0)
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--retry-sleep-seconds", type=float, default=3.0)
@@ -372,27 +324,55 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true", help="Skip chunk_ids already present in case_profiles.jsonl.")
     parser.add_argument("--execute", action="store_true", help="Actually call the remote model.")
     parser.add_argument("--min-case-worthy-score", type=float, default=0.65)
+    parser.add_argument("--max-cases", type=int, default=3, help="Maximum cases the model may return per chunk.")
     return parser.parse_args()
 
 
 def load_chunk_rows(path: Path, chunk_id: str = "", start: int = 0, limit: int = 0) -> list[dict[str, Any]]:
-    if not path.exists():
-        raise SystemExit(f"Chunk file not found: {path}")
+    path = resolve_chunks_path(path)
+    rows: list[dict[str, Any]] = []
+    for row_index, row in enumerate(iter_chunk_rows(path)):
+        if row_index < start:
+            continue
+        current_chunk_id = str(row.get("chunk_id", ""))
+        if chunk_id and current_chunk_id != chunk_id:
+            continue
+        rows.append(row)
+        if limit and len(rows) >= limit:
+            break
+    return rows
+
+
+def resolve_chunks_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    if path.suffix == ".jsonl":
+        json_path = path.with_suffix(".json")
+        if json_path.exists():
+            return json_path
+    if path.suffix == ".json":
+        jsonl_path = path.with_suffix(".jsonl")
+        if jsonl_path.exists():
+            return jsonl_path
+    raise SystemExit(f"Chunk file not found: {path}")
+
+
+def iter_chunk_rows(path: Path) -> list[dict[str, Any]]:
+    if path.suffix == ".json":
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            raise SystemExit(f"Chunk JSON must be a list: {path}")
+        return [row for row in data if isinstance(row, dict)]
+
     rows: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as file:
-        for row_index, line in enumerate(file):
-            if row_index < start:
-                continue
+        for line in file:
             stripped = line.strip()
             if not stripped:
                 continue
             row = json.loads(stripped)
-            current_chunk_id = str(row.get("chunk_id", ""))
-            if chunk_id and current_chunk_id != chunk_id:
-                continue
-            rows.append(row)
-            if limit and len(rows) >= limit:
-                break
+            if isinstance(row, dict):
+                rows.append(row)
     return rows
 
 
@@ -459,6 +439,174 @@ def call_model(
                 break
             time.sleep(retry_sleep_seconds)
     raise last_exc if last_exc is not None else RuntimeError("Model call failed without exception.")
+
+
+def process_chunk_row(
+    args: argparse.Namespace,
+    chunk_row: dict[str, Any],
+    offset: int,
+    total: int,
+    run_dir: Path,
+    api_key: str,
+    base_url: str | None,
+    client_state: threading.local,
+) -> dict[str, Any]:
+    chunk_id = str(chunk_row.get("chunk_id", ""))
+    payload = build_payload(chunk_row)
+    messages = build_case_extraction_messages(payload, version=args.prompt_version, max_cases=args.max_cases)
+    if args.save_prompts:
+        prompt_dir = run_dir / "prompts"
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        (prompt_dir / f"{chunk_id}.system.txt").write_text(messages["system_prompt"], encoding="utf-8")
+        (prompt_dir / f"{chunk_id}.user.txt").write_text(messages["user_prompt"], encoding="utf-8")
+
+    try:
+        client = get_thread_client(
+            client_state=client_state,
+            api_key=api_key,
+            base_url=base_url,
+            timeout_seconds=args.timeout_seconds,
+        )
+        last_parse_exc: Exception | None = None
+        for parse_attempt in range(args.max_retries + 1):
+            elapsed, raw_content, usage = call_model(
+                client=client,
+                model=args.model,
+                system_prompt=messages["system_prompt"],
+                user_prompt=messages["user_prompt"],
+                temperature=args.temperature,
+                max_tokens=args.max_tokens,
+                json_mode=not args.disable_json_mode,
+                system_as_user=args.system_as_user,
+                max_retries=args.max_retries,
+                retry_sleep_seconds=args.retry_sleep_seconds,
+            )
+            try:
+                parsed = parse_json_content(raw_content)
+                break
+            except Exception as exc:
+                last_parse_exc = exc
+                if parse_attempt >= args.max_retries:
+                    raise
+                time.sleep(args.retry_sleep_seconds)
+        else:
+            raise last_parse_exc if last_parse_exc is not None else ValueError("Failed to parse model response.")
+
+        cases = [item for item in parsed.get("cases", []) if isinstance(item, dict)]
+        case_lines: list[str] = []
+        accepted = 0
+        for index, case_row in enumerate(cases, start=1):
+            score = safe_float(case_row.get("case_worthy_score"))
+            if score < args.min_case_worthy_score:
+                continue
+            normalized = normalize_case_row(
+                chunk_id=chunk_id,
+                chunk_row=chunk_row,
+                case_row=case_row,
+                model=args.model,
+                provider=args.provider,
+                prompt_version=args.prompt_version,
+                usage=usage,
+                elapsed=elapsed,
+                case_index=index,
+            )
+            case_lines.append(json.dumps(normalized, ensure_ascii=False))
+            accepted += 1
+
+        return {
+            "ok": True,
+            "offset": offset,
+            "total": total,
+            "chunk_id": chunk_id,
+            "elapsed": elapsed,
+            "accepted": accepted,
+            "case_lines": case_lines,
+            "chunk_output_line": json.dumps(
+                {
+                    "chunk_id": chunk_id,
+                    "cases_returned": len(cases),
+                    "cases_accepted": accepted,
+                    "global_notes": parsed.get("global_notes", []),
+                },
+                ensure_ascii=False,
+            ),
+            "raw_line": json.dumps(
+                {
+                    "chunk_id": chunk_id,
+                    "model": args.model,
+                    "provider": args.provider,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "usage": usage,
+                    "content": raw_content,
+                },
+                ensure_ascii=False,
+            ),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "offset": offset,
+            "total": total,
+            "chunk_id": chunk_id,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+
+
+def get_thread_client(
+    client_state: threading.local,
+    api_key: str,
+    base_url: str | None,
+    timeout_seconds: float,
+) -> OpenAI:
+    client = getattr(client_state, "client", None)
+    if client is None:
+        client = OpenAI(api_key=api_key, base_url=base_url or None, timeout=timeout_seconds)
+        client_state.client = client
+    return client
+
+
+def write_chunk_result(
+    result: dict[str, Any],
+    case_file: Any,
+    chunk_outputs_file: Any,
+    raw_file: Any,
+    errors_file: Any,
+    completed: int,
+    failed: int,
+    accepted_cases: int,
+) -> tuple[int, int, int]:
+    if result.get("ok"):
+        for line in result.get("case_lines", []):
+            case_file.write(line + "\n")
+        case_file.flush()
+        chunk_outputs_file.write(str(result["chunk_output_line"]) + "\n")
+        chunk_outputs_file.flush()
+        raw_file.write(str(result["raw_line"]) + "\n")
+        raw_file.flush()
+        completed += 1
+        accepted_cases += int(result.get("accepted", 0))
+        print(
+            f"[{result['offset']}/{result['total']}] OK {result['chunk_id']} "
+            f"cases={result['accepted']} {result['elapsed']:.2f}s"
+        )
+        return completed, failed, accepted_cases
+
+    failed += 1
+    errors_file.write(
+        json.dumps(
+            {
+                "chunk_id": result["chunk_id"],
+                "error_type": result["error_type"],
+                "error": result["error"],
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
+    errors_file.flush()
+    print(f"[{result['offset']}/{result['total']}] FAIL {result['chunk_id']}: {result['error_type']}: {result['error']}")
+    return completed, failed, accepted_cases
 
 
 def parse_json_content(content: str) -> dict[str, Any]:
@@ -639,6 +787,7 @@ def write_run_config(
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,
         "system_as_user": args.system_as_user,
+        "max_cases": args.max_cases,
         "selected": selected_count,
         "chunk_id": args.chunk_id,
         "start": args.start,

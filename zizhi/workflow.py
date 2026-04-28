@@ -17,6 +17,7 @@ from zizhi.agents import (
     response_composer,
     strategy_mapper,
 )
+from zizhi.case_retrieval import CaseRetriever
 from zizhi.corpus import load_simaguang_commentary_corpus, load_tagging_chunk_corpus
 from zizhi.retrieval import HistoricalRetriever
 from zizhi.router import IntentRouter
@@ -34,6 +35,7 @@ class ZiZhiWorkflow:
         intent_router = IntentRouter.from_env()
         self.context = AgentContext(
             retriever=base_retriever,
+            case_retriever=CaseRetriever(),
             factual_retriever=HistoricalRetriever(chunks=factual_chunks, enable_lancedb=False)
             if factual_chunks
             else base_retriever,

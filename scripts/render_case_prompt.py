@@ -20,10 +20,11 @@ DEFAULT_CHUNKS_PATH = ROOT / ".cache" / "zizhi_tagging_chunks.jsonl"
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Render case extraction prompts for one chunk.")
-    parser.add_argument("--chunks", type=Path, default=DEFAULT_CHUNKS_PATH, help="Path to tagging chunks JSONL.")
+    parser.add_argument("--chunks", type=Path, default=DEFAULT_CHUNKS_PATH, help="Path to tagging chunks JSON/JSONL.")
     parser.add_argument("--chunk-id", help="Exact chunk_id to render.")
     parser.add_argument("--index", type=int, help="0-based row index in tagging chunks JSONL.")
     parser.add_argument("--version", default="v1", choices=["v1"], help="Prompt version.")
+    parser.add_argument("--max-cases", type=int, default=3, help="Maximum cases to request in the rendered prompt.")
     parser.add_argument(
         "--format",
         default="combined",
@@ -34,7 +35,7 @@ def main() -> None:
 
     chunk_row = _load_row(args.chunks, chunk_id=args.chunk_id, index=args.index)
     payload = _build_payload(chunk_row)
-    messages = build_case_extraction_messages(payload, version=args.version)
+    messages = build_case_extraction_messages(payload, version=args.version, max_cases=args.max_cases)
 
     if args.format == "system":
         print(messages["system_prompt"])
@@ -56,24 +57,48 @@ def main() -> None:
 def _load_row(path: Path, chunk_id: str | None, index: int | None) -> dict[str, Any]:
     if chunk_id is None and index is None:
         raise SystemExit("Please provide either --chunk-id or --index.")
-    if not path.exists():
-        raise SystemExit(f"Input file not found: {path}")
-
-    with path.open("r", encoding="utf-8") as file:
-        for row_index, line in enumerate(file):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            row = json.loads(stripped)
-            row_chunk_id = str(row.get("chunk_id", ""))
-            if chunk_id is not None and row_chunk_id == chunk_id:
-                return row
-            if index is not None and row_index == index:
-                return row
+    path = _resolve_chunks_path(path)
+    for row_index, row in enumerate(_load_rows(path)):
+        row_chunk_id = str(row.get("chunk_id", ""))
+        if chunk_id is not None and row_chunk_id == chunk_id:
+            return row
+        if index is not None and row_index == index:
+            return row
 
     if chunk_id is not None:
         raise SystemExit(f"chunk_id not found: {chunk_id}")
     raise SystemExit(f"index out of range: {index}")
+
+
+def _resolve_chunks_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    if path.suffix == ".jsonl":
+        json_path = path.with_suffix(".json")
+        if json_path.exists():
+            return json_path
+    if path.suffix == ".json":
+        jsonl_path = path.with_suffix(".jsonl")
+        if jsonl_path.exists():
+            return jsonl_path
+    raise SystemExit(f"Input file not found: {path}")
+
+
+def _load_rows(path: Path) -> list[dict[str, Any]]:
+    if path.suffix == ".json":
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as file:
+        for line in file:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            row = json.loads(stripped)
+            if isinstance(row, dict):
+                rows.append(row)
+    return rows
 
 
 def _build_payload(chunk_row: dict[str, Any]) -> dict[str, Any]:

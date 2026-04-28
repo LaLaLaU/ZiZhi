@@ -43,20 +43,15 @@ ROLE_SUBSTRING_CANONICAL_RULES = (
 def build_chunk_catalog(chunks_path: Path) -> ChunkCatalog:
     chunk_index: dict[str, int] = {}
     section_index: dict[str, tuple[int, int]] = {}
-    with chunks_path.open("r", encoding="utf-8") as file:
-        for idx, line in enumerate(file):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            row = json.loads(stripped)
-            chunk_id = str(row.get("chunk_id", "")).strip()
-            if not chunk_id:
-                continue
-            chunk_index[chunk_id] = idx
-            for section_pos, section_key in enumerate(row.get("section_keys", [])):
-                section_key = str(section_key).strip()
-                if section_key:
-                    section_index[section_key] = (idx, section_pos)
+    for idx, row in enumerate(load_rows(chunks_path)):
+        chunk_id = str(row.get("chunk_id", "")).strip()
+        if not chunk_id:
+            continue
+        chunk_index[chunk_id] = idx
+        for section_pos, section_key in enumerate(row.get("section_keys", [])):
+            section_key = str(section_key).strip()
+            if section_key:
+                section_index[section_key] = (idx, section_pos)
     return ChunkCatalog(chunk_index=chunk_index, section_index=section_index)
 
 
@@ -360,13 +355,33 @@ def dedupe_preserve_order(values: Any) -> list[str]:
 
 
 def load_rows(path: Path) -> list[dict[str, Any]]:
+    path = resolve_json_family_path(path)
     if not path.exists():
         return []
     if path.suffix == ".jsonl":
-        with path.open("r", encoding="utf-8") as file:
-            return [json.loads(line) for line in file if line.strip()]
+        text = path.read_text(encoding="utf-8").strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            data = json.loads(text)
+            return data if isinstance(data, list) else []
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
     data = json.loads(path.read_text(encoding="utf-8"))
     return data if isinstance(data, list) else []
+
+
+def resolve_json_family_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    if path.suffix == ".jsonl":
+        json_path = path.with_suffix(".json")
+        if json_path.exists():
+            return json_path
+    if path.suffix == ".json":
+        jsonl_path = path.with_suffix(".jsonl")
+        if jsonl_path.exists():
+            return jsonl_path
+    return path
 
 
 def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
