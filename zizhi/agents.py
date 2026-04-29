@@ -13,6 +13,7 @@ from zizhi.schemas import (
     FinalOutput,
     HistoricalMirror,
     PoetryComfort,
+    RetrievedCase,
     SituationAnalysis,
     StrategyOption,
     StrategyReport,
@@ -283,9 +284,86 @@ def _rewrite_to_queries(text: str) -> list[str]:
         return []
 
 
+_RERANK_PROMPT = (
+    "你是一个历史案例匹配专家。用户有一个现代生活/职场的困惑，"
+    "下面是从案例库中检索出的 {n} 个历史案例的【可迁移模式】。\n\n"
+    "请从中挑选出与用户问题最相关的 {k} 个案例，按相关性从高到低排列。\n\n"
+    "用户问题：\n{query}\n\n"
+    "候选案例模式列表：\n{patterns}\n\n"
+    "请严格按以下 JSON 格式返回（不要有其他内容）：\n"
+    '{{"selected": [{{"index": 1, "reason": "为什么相关"}}], "reasoning": "简要说明选择逻辑"}}\n'
+    "注意：index 是候选列表中的编号（从1开始），只选真正相关的，不要硬凑。"
+)
+
+
+def llm_rerank_cases(
+    query: str,
+    candidates: list[RetrievedCase],
+    top_k: int = 4,
+) -> list[RetrievedCase]:
+    """LLM 从候选列表中精选最相关的案例。失败时返回原始列表的前 top_k 个。"""
+    import os
+    import json as _json
+
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key or not candidates:
+        return candidates[:top_k]
+
+    try:
+        from openai import OpenAI
+
+        base_url = os.getenv("ZIZHI_RERANK_BASE_URL", os.getenv("ZIZHI_ROUTER_BASE_URL", "https://api.deepseek.com")).strip()
+        model = os.getenv("ZIZHI_RERANK_MODEL", os.getenv("ZIZHI_ROUTER_MODEL", "deepseek-chat")).strip() or "deepseek-chat"
+        timeout = float(os.getenv("ZIZHI_RERANK_TIMEOUT_SECONDS", "30"))
+        coarse_k = int(os.getenv("ZIZHI_RERANK_CANDIDATES", "50"))
+
+        pool = candidates[:coarse_k]
+        pattern_lines = []
+        for i, c in enumerate(pool, 1):
+            pattern_lines.append(f"[{i}] {c.title}\n    模式：{c.transferable_pattern}")
+        patterns_text = "\n\n".join(pattern_lines)
+
+        prompt = _RERANK_PROMPT.format(n=len(pool), k=top_k, query=query, patterns=patterns_text)
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+        response = client.chat.completions.create(
+            model=model,
+            temperature=0.0,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=800,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = _json.loads(raw)
+        selected = data.get("selected", [])
+
+        result = []
+        for item in selected:
+            idx = item.get("index", 0) - 1
+            if 0 <= idx < len(pool):
+                case = pool[idx].model_copy()
+                case.retrieval_score = round(1.0 - len(result) * 0.1, 4)
+                case.mapping_reason = item.get("reason", case.mapping_reason)
+                result.append(case)
+        return result[:top_k] if result else candidates[:top_k]
+
+    except Exception:
+        return candidates[:top_k]
+
+
 def historical_retriever(state: AnalysisState, context: AgentContext) -> AnalysisState:
+    import os
+
     if context.case_retriever is not None:
-        state.case_matches = context.case_retriever.search(state.retrieval_queries, top_k=4)
+        coarse_k = int(os.getenv("ZIZHI_RERANK_CANDIDATES", "50"))
+        state.case_matches = context.case_retriever.search(state.retrieval_queries, top_k=coarse_k)
+        # LLM 精选
+        enable_rerank = os.getenv("ZIZHI_RERANK_ENABLED", "1") != "0"
+        query_text = state.user_input or (state.retrieval_queries[0] if state.retrieval_queries else "")
+        if enable_rerank and query_text:
+            state.case_matches = llm_rerank_cases(query_text, state.case_matches, top_k=4)
         state.evidence_pool = context.case_retriever.expand_cases_to_chunks(state.case_matches, per_case_top_k=2, max_chunks=6)
         if state.case_matches:
             return state
